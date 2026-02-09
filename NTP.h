@@ -28,6 +28,7 @@
 #include <Udp.h>
 
 #define SEVENTYYEARS 2208988800UL
+#define NTP_OFFSET SEVENTYYEARS
 #define UNIXOFFSET 946684800UL
 
 #ifdef __AVR__
@@ -247,26 +248,26 @@ class NTP {
 
   private:
     UDP *udp;
-    const char* server = nullptr;
+    char server[64];
+    bool useServerIP = false;
     IPAddress serverIP;
     uint8_t ntpRequest[NTP_PACKET_SIZE]; // = {0xE3, 0x00, 0x06, 0xEC};
     uint8_t ntpQuery[NTP_PACKET_SIZE];
     time_t utcCurrent = 0;
     time_t local = 0;
-    struct tm *current;
+    struct tm *current = nullptr;
     uint32_t interval = 60000;
     uint32_t lastUpdate = 0;
-    uint8_t tzHours = 0;
-    uint8_t tzMinutes = 0;
-    int32_t timezoneOffset;
+    int32_t timezoneOffset = 0;
     int16_t dstOffset = 0;
     bool dstZone = true;
-    uint32_t timestamp;
+    bool dstRuleConfigured = false;
+    bool stdRuleConfigured = false;
     uint32_t ntpTime = 0;
     uint32_t utcTime = 0;   
-    time_t utcSTD, utcDST;
-    time_t dstTime, stdTime;
-    uint16_t yearDST;
+    time_t utcSTD = 0, utcDST = 0;
+    time_t dstTime = 0, stdTime = 0;
+    uint16_t yearDST = 0;
     char timeString[64];
     struct ruleDST {
 	    char tzName[6]; // five chars max
@@ -278,7 +279,6 @@ class NTP {
       } dstStart, dstEnd;
     void init();
     bool ntpUpdate();
-    time_t localTime();
     void currentTime();
     void beginDST();
     time_t calcDateDST(struct ruleDST rule, int year);
