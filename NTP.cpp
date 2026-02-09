@@ -31,12 +31,15 @@ NTP::~NTP() {
 	}
 
 void NTP::begin(const char* server) {
-	this->server = server;
+	strncpy(this->server, server, sizeof(this->server) - 1);
+	this->server[sizeof(this->server) - 1] = '\0';
+	useServerIP = false;
 	init(); 
 	}
 
 void NTP::begin(IPAddress serverIP) {
 	this->serverIP = serverIP;
+	useServerIP = true;
 	init();
 	}
 
@@ -53,7 +56,7 @@ void NTP::init() {
   ntpRequest[15]  = 52;
 	udp->begin(NTP_PORT);
 	ntpUpdate();
-	if (dstZone) {
+	if (dstZone && dstRuleConfigured && stdRuleConfigured) {
 		timezoneOffset = dstEnd.tzOffset * SECS_PER_MINUTES;
 		dstOffset = (dstStart.tzOffset - dstEnd.tzOffset) * SECS_PER_MINUTES;
 		currentTime();
@@ -73,31 +76,31 @@ bool NTP::update() {
 	}
 
 bool NTP::ntpUpdate() {
-	if (server == nullptr) udp->beginPacket(serverIP, NTP_PORT);
+	if (useServerIP) udp->beginPacket(serverIP, NTP_PORT);
 	else udp->beginPacket(server, NTP_PORT);
 	udp->write(ntpRequest, NTP_PACKET_SIZE);
 	udp->endPacket();
-	uint8_t timeout = 0;
+	
+	uint32_t startTime = millis();
 	uint8_t size = 0;
-	do {
-		delay (10);
+	while (size != 48) {
 		size = udp->parsePacket();
-		if (timeout > 100) return false;
-		timeout++;
-		} while (size != 48);
-	lastUpdate = millis() - (10 * (timeout + 1));
+		if (millis() - startTime > 1000) return false; // 1 second timeout
+		if (size == 0) delay(1); // Yield to avoid watchdog issues on ESP platforms
+		}
+	lastUpdate = millis();
 	udp->read(ntpQuery, NTP_PACKET_SIZE);
 	#ifdef __AVR__
  		unsigned long highWord = word(ntpQuery[40], ntpQuery[41]);
 		unsigned long lowWord = word(ntpQuery[42], ntpQuery[43]);
-		timestamp = highWord << 16 | lowWord;
+		uint32_t timestamp = highWord << 16 | lowWord;
 		if (timestamp != 0) {
  			ntpTime = timestamp;
  			utcTime = ntpTime - NTP_OFFSET;
 			}
 		else return false;
  	#else
- 		timestamp = ntpQuery[40] << 24 | ntpQuery[41] << 16 | ntpQuery[42] << 8 | ntpQuery[43];
+ 		uint32_t timestamp = ntpQuery[40] << 24 | ntpQuery[41] << 16 | ntpQuery[42] << 8 | ntpQuery[43];
 		if (timestamp != 0) {
  			ntpTime = timestamp;
  			utcTime = ntpTime - SEVENTYYEARS;
@@ -112,39 +115,63 @@ void NTP::updateInterval(uint32_t interval) {
 	}
 
 void NTP::ruleDST(const char* tzName, int8_t week, int8_t wday, int8_t month, int8_t hour, int tzOffset) {
-	strcpy(dstStart.tzName, tzName);
+	// Validate input parameters
+	if (week < 0 || week > 4) return;
+	if (wday < 0 || wday > 6) return;
+	if (month < 0 || month > 11) return;
+	if (hour < 0 || hour > 23) return;
+	
+	strncpy(dstStart.tzName, tzName, sizeof(dstStart.tzName) - 1);
+	dstStart.tzName[sizeof(dstStart.tzName) - 1] = '\0';
 	dstStart.week = week;
 	dstStart.wday = wday;
 	dstStart.month = month;
 	dstStart.hour = hour;
 	dstStart.tzOffset = tzOffset;
+	dstRuleConfigured = true;
 	}
 
 const char* NTP::ruleDST() {
-	if(dstZone) {
-		return ctime(&dstTime);
+	if(dstZone && dstRuleConfigured) {
+		const char* timeStr = ctime(&dstTime);
+		if (!timeStr) return "Invalid DST time";
+		strncpy(timeString, timeStr, sizeof(timeString) - 1);
+		timeString[sizeof(timeString) - 1] = '\0';
+		return timeString;
 		}
 	else return RULE_DST_MESSAGE;
 	}
 
 void NTP::ruleSTD(const char* tzName, int8_t week, int8_t wday, int8_t month, int8_t hour, int tzOffset) {
-	strcpy(dstEnd.tzName, tzName);
+	// Validate input parameters
+	if (week < 0 || week > 4) return;
+	if (wday < 0 || wday > 6) return;
+	if (month < 0 || month > 11) return;
+	if (hour < 0 || hour > 23) return;
+	
+	strncpy(dstEnd.tzName, tzName, sizeof(dstEnd.tzName) - 1);
+	dstEnd.tzName[sizeof(dstEnd.tzName) - 1] = '\0';
 	dstEnd.week = week;
 	dstEnd.wday = wday;
 	dstEnd.month = month;
 	dstEnd.hour = hour;
 	dstEnd.tzOffset = tzOffset;
+	stdRuleConfigured = true;
 	}
 		
 const char* NTP::ruleSTD() {
-	if(dstZone) {
-		return ctime(&stdTime);
+	if(dstZone && stdRuleConfigured) {
+		const char* timeStr = ctime(&stdTime);
+		if (!timeStr) return "Invalid STD time";
+		strncpy(timeString, timeStr, sizeof(timeString) - 1);
+		timeString[sizeof(timeString) - 1] = '\0';
+		return timeString;
 		}
 	else return RULE_STD_MESSAGE;
 	}
 
 const char* NTP::tzName() {
-	if (dstZone) {
+	if (dstZone && dstRuleConfigured && stdRuleConfigured) {
 		if (summerTime()) return dstStart.tzName;
 		else return dstEnd.tzName;
 		}
@@ -152,8 +179,6 @@ const char* NTP::tzName() {
 	}
 
 void NTP::timeZone(int8_t tzHours, int8_t tzMinutes) {
-	this->tzHours = tzHours;
-	this->tzMinutes = tzMinutes;
 	timezoneOffset = tzHours * 3600;
 	if (tzHours < 0) {
 		timezoneOffset -= tzMinutes * 60;
@@ -178,66 +203,81 @@ time_t NTP::epoch() {
 
 void NTP::currentTime() {
 	utcCurrent = utcTime + ((millis() - lastUpdate) / 1000); 
-	if (dstZone) {
+	if (dstZone && dstRuleConfigured && stdRuleConfigured) {
 		if (summerTime()) {
 			local = utcCurrent + dstOffset + timezoneOffset;
-			current = gmtime(&local);    
+			current = gmtime(&local);
+			if (!current) return;  // Invalid time
 			}
 		else {
 			local = utcCurrent + timezoneOffset;
 			current = gmtime(&local);
+			if (!current) return;  // Invalid time
 			}
 		if ((current->tm_year + 1900) > yearDST) beginDST();
 		}
 	else {
 		local = utcCurrent + timezoneOffset;
 		current = gmtime(&local);
+		if (!current) return;  // Invalid time
 		}
 	}
 
 int16_t NTP::year() {
 	currentTime();
+	if (!current) return 1970;  // Default fallback
 	return current->tm_year + 1900;
 	}
 
 int8_t NTP::month() {
 	currentTime();
+	if (!current) return 1;  // Default fallback
 	return current->tm_mon + 1;
 	}
 
 int8_t NTP::day() {
 	currentTime();
+	if (!current) return 1;  // Default fallback
 	return current->tm_mday;
 	}
 
 int8_t NTP::weekDay() {
 	currentTime();
+	if (!current) return 0;  // Default fallback
 	return current->tm_wday;
 	}
 
 int8_t NTP::hours() {
 	currentTime();
+	if (!current) return 0;  // Default fallback
 	return current->tm_hour;
 	}
 
 int8_t NTP::minutes() {
 	currentTime();
+	if (!current) return 0;  // Default fallback
 	return current->tm_min;
 	}
 
 int8_t NTP::seconds() {
 	currentTime();
+	if (!current) return 0;  // Default fallback
 	return current->tm_sec;
 	}
 
 const char* NTP::formattedTime(const char *format) {
 	currentTime();
 	memset(timeString, 0, sizeof(timeString));
+	if (!current) {
+		strncpy(timeString, "Invalid time", sizeof(timeString) - 1);
+		return timeString;
+		}
 	strftime(timeString, sizeof(timeString), format, current);
 	return timeString;
 	}
 
 void NTP::beginDST() {
+	if (!current) return;  // Invalid time
 	dstTime = calcDateDST(dstStart, current->tm_year + 1900);
 	utcDST = dstTime - (dstEnd.tzOffset * SECS_PER_MINUTES);
 	stdTime = calcDateDST(dstEnd, current->tm_year + 1900);
