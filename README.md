@@ -3,6 +3,12 @@ The **NTP** library allows you to receive time information from the Internet. It
 different timezones and daylight saving time (DST).
 This NTP library uses the functions of the time.h standard library.<br>
 
+## Changes for 1.7.1
+
+- code refactoring
+- improve error handling and parameter validation
+- fix missing AVR NTP_OFFSET
+
 ## Changes for 1.7
 
 - support for AVR
